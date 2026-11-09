@@ -171,7 +171,7 @@ impl Window {
         if result.is_ok() {
             Ok(rect)
         } else {
-            Err(Error::WindowsError(windows::core::Error::from_win32()))
+            Err(Error::WindowsError(windows::core::Error::from_thread()))
         }
     }
 

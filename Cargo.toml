@@ -20,7 +20,7 @@ resolver = "2"
 
 [dependencies]
 # Windows API
-windows = { version = "0.61.1", features = [
+windows = { git = "https://github.com/JustRustThings/windows-rs", branch = "stuff-0.62.2", features = [
     "Foundation_Metadata",
     "Foundation",
     "Graphics_Capture",
@@ -40,11 +40,12 @@ windows = { version = "0.61.1", features = [
     "Win32_Graphics_Dxgi_Common",
     "Win32_Graphics_Gdi",
     "Win32_System_Threading",
+    "Win32_System_LibraryLoader",
     "Win32_System_WinRT_Direct3D11",
     "Win32_System_WinRT_Graphics_Capture",
     "Win32_UI_WindowsAndMessaging",
 ] }
-windows-future = "0.2.0"
+windows-future = { git = "https://github.com/JustRustThings/windows-rs", branch = "stuff-0.62.2" }
 
 # Mutex optimization
 parking_lot = "0.12.3"

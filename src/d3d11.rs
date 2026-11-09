@@ -14,7 +14,7 @@ use windows::{
             },
             Dxgi::IDXGIDevice,
         },
-        System::WinRT::Direct3D11::CreateDirect3D11DeviceFromDXGIDevice,
+        System::LibraryLoader::{GetProcAddress, LoadLibraryW},
     },
     core::Interface,
 };
@@ -94,9 +94,40 @@ pub fn create_d3d_device() -> Result<(ID3D11Device, ID3D11DeviceContext), Error>
 /// Create `IDirect3DDevice` From `ID3D11Device`
 #[inline]
 pub fn create_direct3d_device(d3d_device: &ID3D11Device) -> Result<IDirect3DDevice, Error> {
+    let function = (*CREATE_DIRECT3D11_DEVICE.get_or_init(load_create_direct3d11_device))
+        .ok_or_else(|| {
+            // ERROR_PROC_NOT_FOUND
+            windows::core::Error::from(windows::core::HRESULT::from_win32(127))
+        })?;
     let dxgi_device: IDXGIDevice = d3d_device.cast()?;
-    let inspectable = unsafe { CreateDirect3D11DeviceFromDXGIDevice(&dxgi_device)? };
+
+    let mut inspectable: *mut core::ffi::c_void = core::ptr::null_mut();
+    unsafe {
+        function(dxgi_device.as_raw(), &mut inspectable).ok()?;
+    }
+    let inspectable: windows::core::IInspectable =
+        unsafe { windows::core::Type::from_abi(inspectable) }?;
     let device: IDirect3DDevice = inspectable.cast()?;
 
     Ok(device)
+}
+
+type CreateDirect3D11DeviceFromDXGIDeviceFn = unsafe extern "system" fn(
+    *mut core::ffi::c_void,
+    *mut *mut core::ffi::c_void,
+) -> windows::core::HRESULT;
+
+/// `CreateDirect3D11DeviceFromDXGIDevice` is only available on Windows 8+.
+/// Load it dynamically from `d3d11.dll` to avoid a static import, so the
+/// binary still loads on older systems (Windows 7). Screen capture itself is
+/// Windows 10-only, so on Windows 7 this returns an error.
+static CREATE_DIRECT3D11_DEVICE: std::sync::OnceLock<Option<CreateDirect3D11DeviceFromDXGIDeviceFn>> =
+    std::sync::OnceLock::new();
+
+fn load_create_direct3d11_device() -> Option<CreateDirect3D11DeviceFromDXGIDeviceFn> {
+    let d3d11 = unsafe { LoadLibraryW(windows::core::w!("d3d11.dll")) }.ok()?;
+    let proc = unsafe {
+        GetProcAddress(d3d11, windows::core::s!("CreateDirect3D11DeviceFromDXGIDevice"))
+    }?;
+    Some(unsafe { std::mem::transmute(proc) })
 }

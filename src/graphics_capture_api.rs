@@ -1,3 +1,4 @@
+use std::cell::{Cell, RefCell};
 use std::sync::{
     Arc,
     atomic::{self, AtomicBool},
@@ -159,7 +160,7 @@ impl GraphicsCaptureApi {
         let session = frame_pool.CreateCaptureSession(&item)?;
 
         // Preallocate memory
-        let mut buffer = vec![0u8; 3840 * 2160 * 4];
+        let buffer = RefCell::new(vec![0u8; 3840 * 2160 * 4]);
 
         // Indicates if the capture is closed
         let halt = Arc::new(AtomicBool::new(false));
@@ -204,7 +205,7 @@ impl GraphicsCaptureApi {
             let context = d3d_device_context.clone();
             let result_frame_pool = result;
 
-            let mut last_size = item.Size()?;
+            let last_size = Cell::new(item.Size()?);
             let callback_frame_pool = callback;
             let direct3d_device_recreate = SendDirectX::new(direct3d_device.clone());
 
@@ -237,8 +238,8 @@ impl GraphicsCaptureApi {
                 unsafe { frame_texture.GetDesc(&mut desc) }
 
                 // Check if the size has been changed
-                if frame_content_size.Width != last_size.Width
-                    || frame_content_size.Height != last_size.Height
+                if frame_content_size.Width != last_size.get().Width
+                    || frame_content_size.Height != last_size.get().Height
                 {
                     let direct3d_device_recreate = &direct3d_device_recreate;
                     frame_pool_recreate.Recreate(
@@ -248,7 +249,7 @@ impl GraphicsCaptureApi {
                         frame_content_size,
                     )?;
 
-                    last_size = frame_content_size;
+                    last_size.set(frame_content_size);
 
                     return Ok(());
                 }
@@ -258,13 +259,14 @@ impl GraphicsCaptureApi {
                 let texture_height = desc.Height;
 
                 // Create a frame
+                let mut buffer_ref = buffer.borrow_mut();
                 let mut frame = Frame::new(
                     &d3d_device_frame_pool,
                     frame_surface,
                     frame_texture,
                     timespan,
                     &context,
-                    &mut buffer,
+                    &mut buffer_ref,
                     texture_width,
                     texture_height,
                     color_format,

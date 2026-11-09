@@ -2,7 +2,7 @@ use std::{
     mem,
     os::windows::prelude::AsRawHandle,
     sync::{
-        Arc,
+        Arc, OnceLock,
         atomic::{self, AtomicBool},
         mpsc,
     },
@@ -16,9 +16,10 @@ use windows::{
         Foundation::{HANDLE, LPARAM, S_FALSE, WPARAM},
         Graphics::Direct3D11::{ID3D11Device, ID3D11DeviceContext},
         System::{
+            LibraryLoader::{GetProcAddress, LoadLibraryW},
             Threading::{GetCurrentThreadId, GetThreadId},
             WinRT::{
-                CreateDispatcherQueueController, DQTAT_COM_NONE, DQTYPE_THREAD_CURRENT,
+                DQTAT_COM_NONE, DQTYPE_THREAD_CURRENT,
                 DispatcherQueueOptions, RO_INIT_MULTITHREADED, RoInitialize,
             },
         },
@@ -221,6 +222,42 @@ pub enum GraphicsCaptureApiError<E> {
     FrameHandlerError(E),
 }
 
+type CreateDispatcherQueueControllerFn = unsafe extern "system" fn(
+    DispatcherQueueOptions,
+    *mut *mut core::ffi::c_void,
+) -> windows::core::HRESULT;
+
+/// `CreateDispatcherQueueController` is only available on Windows 10+
+/// (coremessaging.dll). Load it dynamically to avoid a static import, so the
+/// binary still loads on older systems (Windows 7). Screen capture is
+/// Windows 10-only, so on Windows 7 this fails.
+static CREATE_DISPATCHER_QUEUE_CONTROLLER: OnceLock<Option<CreateDispatcherQueueControllerFn>> =
+    OnceLock::new();
+
+fn load_create_dispatcher_queue_controller() -> Option<CreateDispatcherQueueControllerFn> {
+    let coremessaging = unsafe { LoadLibraryW(windows::core::w!("coremessaging.dll")) }.ok()?;
+    let proc = unsafe {
+        GetProcAddress(coremessaging, windows::core::s!("CreateDispatcherQueueController"))
+    }?;
+    Some(unsafe { std::mem::transmute(proc) })
+}
+
+fn create_dispatcher_queue_controller(
+    options: DispatcherQueueOptions,
+) -> WindowsResult<windows::System::DispatcherQueueController> {
+    let function =
+        (*CREATE_DISPATCHER_QUEUE_CONTROLLER.get_or_init(load_create_dispatcher_queue_controller))
+            .ok_or_else(|| {
+                // ERROR_PROC_NOT_FOUND
+                windows::core::Error::from(windows::core::HRESULT::from_win32(127))
+            })?;
+    let mut result: *mut core::ffi::c_void = core::ptr::null_mut();
+    unsafe {
+        function(options, &mut result).ok()?;
+        Ok(windows::core::Type::from_abi(result)?)
+    }
+}
+
 /// A struct representing the context of the capture handler.
 pub struct Context<Flags> {
     /// The flags that are gotten from the settings.
@@ -275,8 +312,9 @@ pub trait GraphicsCaptureApiHandler: Sized {
             apartmentType: DQTAT_COM_NONE,
         };
         let controller = unsafe {
-            CreateDispatcherQueueController(options)
-                .map_err(|_| GraphicsCaptureApiError::FailedToCreateDispatcherQueueController)?
+            create_dispatcher_queue_controller(options).map_err(|_| {
+                GraphicsCaptureApiError::FailedToCreateDispatcherQueueController
+            })?
         };
 
         // Get current thread ID
@@ -407,7 +445,7 @@ pub trait GraphicsCaptureApiHandler: Sized {
                     apartmentType: DQTAT_COM_NONE,
                 };
                 let controller = unsafe {
-                    CreateDispatcherQueueController(options).map_err(|_| {
+                    create_dispatcher_queue_controller(options).map_err(|_| {
                         GraphicsCaptureApiError::FailedToCreateDispatcherQueueController
                     })?
                 };
